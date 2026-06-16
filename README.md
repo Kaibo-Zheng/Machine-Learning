@@ -1,85 +1,179 @@
-# MNIST 极少标签半监督分类（每类 1 个标签）
+# Machine Learning Course Project: Semi-supervised MNIST Classification
 
-机器学习大作业。`train_dataset`（5 万张）里**只有 10 张图允许使用标签**（每类 1 张，索引由作业给定），
-其余约 4.999 万张为无标签数据。目标：充分利用无标签数据，训练出在 `mnist_test` 上准确率尽量高的 **CNN**。
+本仓库是《机器学习》课程大作业的代码仓库，主题是在 MNIST 上完成极少标签条件下的半监督手写数字分类。
 
-## 方法总览（两条表征路线 + 图标签传播 + 自训练）
+作业约束很严格：划分后的 `train_dataset` 中只有题目指定的 10 张图像允许使用真实标签，每个数字类别各 1 张；其余训练图像必须作为无标签数据处理，不能用于训练或超参数选择。最终目标是在不违反标签约束的前提下，训练一个在 `mnist_test` 上表现较好的 CNN 分类器。
 
-```
-                       ┌──────────────────────────────────────────┐
-  全部 5 万张训练图 ──▶ │ Stage1 无监督表征（二选一/对比）            │
-   (无标签)            │   A. 卷积自编码机 (重建)                    │
-                       │   B. SimCLR 对比学习 (NT-Xent, 无翻转增广)  │
-                       └───────────────────┬──────────────────────┘
-                                           │ 嵌入 emb (N,128)
-              10 个锚点标签 ───────────────▼──────────────────────┐
-                       │ Stage2 标签传播 (Zhou 2004, kNN 图)        │ → 伪标签 + 置信度
-                       └───────────────────┬──────────────────────┘
-                                           ▼
-                       │ Stage3 训 CNN：10 真标签 + 高置信伪标签     │
-                       │ Stage4 自训练：CNN 重新打分→扩样本→重训     │ ← 超参只用 val 选
-                       └───────────────────┬──────────────────────┘
-                                           ▼  在 mnist_test 上汇报
+最终方案为：
+
+```text
+SimCLR representation -> LGC label propagation -> CNN classifier -> self-training
 ```
 
-## 文件结构（已按功能归档为子包，从仓库根用 `python -m` 运行）
+最佳测试集准确率为 **98.55%**。
 
-| 文件 | 作用 |
-|---|---|
-| `core/config.py` | 中央配置：种子、锚点索引、各阶段超参、路径 |
-| `core/utils.py` | 种子、设备、评估、检查点 |
-| `core/data.py` | **逐字复现作业划分**；锚点校验；有/无标签切分；各类 loader |
-| `core/models.py` | 共享 backbone、自编码机、SimCLR、最终 `CNNClassifier` |
-| `train/train_autoencoder.py` | 路线 A：卷积自编码机 + 抽嵌入 |
-| `train/train_contrastive.py` | 路线 B：SimCLR 自监督 + 抽嵌入 |
-| `propagation/propagate.py` | 标签传播（主）+ 最近原型（基线）+ 置信度筛选 |
-| `train/train_classifier.py` | CNN 训练 + 自训练迭代（按 val 选最优） |
-| `pipeline/run.py` | 端到端跑单条路线 |
-| `pipeline/compare.py` | 像素/AE/SimCLR 三路线对比，输出 `result/comparison.csv` |
-| `pipeline/tune.py` | val 上扫超参（knn_k × tau_prop） |
-| `pipeline/compare_prop.py` | 传播方法对比：LP vs 最近原型基线 |
-| `pipeline/ablation.py` | 消融表（仅传播 vs +自训练） |
-| `visualization/tsne_viz.py` | 三嵌入 t-SNE 可视化 |
-| `visualization/plot_results.py` | 结果汇总多面板图 |
+## Project Scope
 
-## 运行
+本仓库包含：
+
+- 数据划分与 10 个锚点标签校验代码。
+- 三种表征路线：原始像素、卷积自编码机、SimCLR。
+- 两种伪标签方法：LGC 标签传播和最近原型基线。
+- CNN 分类器训练与自训练流程。
+- 对比实验、传播方法对比、消融实验和可视化脚本。
+- 报告中使用的 6 张主要图像。
+
+本仓库不包含：
+
+- MNIST 原始数据文件。
+- 已训练模型权重。
+- 运行生成的 `result/` 实验输出。
+
+这些文件体积较大，放在补充材料压缩包中。
+
+## Supplementary Materials
+
+补充材料文件：`大作业补充材料.zip`
+
+百度网盘链接：
+
+```text
+https://pan.baidu.com/s/1YlzcaDg6IiaGkBl2IcaX_Q?pwd=sjxv
+```
+
+提取码：
+
+```text
+sjxv
+```
+
+补充材料包含 `data/`、`model/` 和 `result/`。将它们复制到仓库根目录后，可以直接读取已有数据、模型权重和实验结果；也可以只使用本仓库源码重新生成这些文件。
+
+## Repository Structure
+
+```text
+core/
+  config.py              全局配置、锚点索引、超参数和路径
+  data.py                MNIST 加载、固定划分、锚点校验、loader 构造
+  models.py              CNN backbone、Autoencoder、SimCLR、CNNClassifier
+  utils.py               随机种子、设备、评估、checkpoint 工具
+
+train/
+  train_autoencoder.py   自编码机训练与 embedding 抽取
+  train_contrastive.py   SimCLR 训练与 NT-Xent 损失
+  train_classifier.py    CNN 训练、自训练和高置信样本扩充
+
+propagation/
+  propagate.py           LGC 标签传播、最近原型基线、置信度筛选
+
+pipeline/
+  run.py                 单条路线端到端运行
+  compare.py             pixel / AE / SimCLR 三路线对比
+  compare_prop.py        LGC 与最近原型传播方法对比
+  tune.py                验证集超参数扫描
+  ablation.py            仅传播 vs. 加自训练的消融实验
+
+visualization/
+  component_figs.py      报告方法图生成
+  plot_results.py        实验结果汇总图
+  tsne_viz.py            t-SNE 可视化
+
+doc/
+  1.png ... 6.png        报告主要图像
+  requirement.md         作业要求整理
+```
+
+## Method Summary
+
+整体流程分为四步：
+
+1. **无标签表征学习**：使用全部 50,000 张训练图像，但不使用标签。比较原始像素、卷积自编码机和 SimCLR 三种表征。
+2. **标签传播**：以 10 个有标签锚点为种子，在 embedding 空间构建 kNN 图，用 LGC 扩散标签，得到伪标签和置信度。
+3. **CNN 分类器训练**：用 10 个真标签和高置信伪标签训练最终交付的 CNN 分类器。
+4. **自训练**：用上一轮 CNN 重新给无标签样本打分，筛选高置信样本加入训练集并重训。
+
+核心原则是：训练集中的非锚点真实标签不参与训练或超参数选择；验证集标签只用于模型选择和调参；测试集只用于最终汇报。
+
+## Environment
+
+实测环境：
+
+- Python 3.13
+- PyTorch 2.11
+- CUDA 13.0
+- NVIDIA GeForce RTX 5060 Laptop GPU
+
+安装依赖：
 
 ```bash
-pip install -r requirements.txt        # 见文件内 GPU torch 安装说明
+pip install -r requirements.txt
+```
 
-# 均从仓库根目录用 python -m 运行（包内绝对导入）；首次会下载 MNIST 到 ./data、缓存嵌入到 ./result
-python -m pipeline.run --route ae
-python -m pipeline.run --route simclr
+如果需要 GPU 版本 PyTorch，请根据本机 CUDA 版本按 PyTorch 官网命令安装。
 
-# 三路线对比（推荐，报告用）
-python -m pipeline.compare
+## Reproduction
 
-# 快速冒烟（极小 epoch，仅验证流程打通，非真实精度）
+所有命令均从仓库根目录运行。
+
+检查数据划分和 10 个锚点：
+
+```bash
+python -m core.data
+```
+
+快速冒烟测试：
+
+```bash
 python -m pipeline.run --route pixel --quick
 python -m pipeline.compare --quick
 ```
 
-常用开关：`--tau_prop` 传播阶段阈值(默认 0.7)、`--tau_self` 自训练阶段阈值(默认 0.95)、
-`--knn_k` 近邻数、`--self_train_rounds` 自训练轮数、`--propagation {lp,proto}`、
-`--no-cache`（改了嵌入超参后强制重训）。
+运行单条路线：
 
-> 注意两个阈值刻度不同：标签传播概率较"软"(经验 0.5–0.9，取 ~0.7)，CNN softmax 过度自信(取 ~0.95)。
+```bash
+python -m pipeline.run --route pixel
+python -m pipeline.run --route ae
+python -m pipeline.run --route simclr
+```
 
-## 合规要点（务必遵守作业约束）
+运行主对比实验：
 
-- ✅ 只用 `config.ANCHOR_INDICES` 这 10 张的真标签训练；`data.verify_anchors` 会断言它们恰为每类一张。
-- ❌ `train_dataset` 其余图片的真标签**不得用于训练或选超参**。
-- ✅ `val_dataset` 标签**允许**用于选超参（`tau_prop`、`tau_self`、轮数、epoch 等都按 val 准确率选）。
-- ⚠️ 代码里统计“伪标签准确率”等指标仅为**报告诊断**，由 `config.diagnostic_use_true_labels`
-  控制，**绝不回流**到训练或模型选择；提交“纯净版”可将其设为 `False`。
+```bash
+python -m pipeline.compare
+```
 
-## 产物（`./result/`）
+运行传播方法对比和消融实验：
 
-`emb_{route}.npy`（缓存嵌入）、`encoder_{route}.pt`、`classifier_{route}.pt`、
-`result_{route}.json`（逐轮 val/test）、`comparison.csv`、`comparison_propagation.csv`、
-`tune_simclr.csv`、`ablation.csv`、`tsne_routes.png`、`results_summary.png`。报告在 `doc/`。
+```bash
+python -m pipeline.compare_prop
+python -m pipeline.ablation
+```
 
-## 复现性
+重新生成报告图：
 
-种子固定 42；`utils.seed_torch` 复用作业给定设置。划分仅由 `torch.Generator(seed=42)` 决定，
-与下载目录无关。本机已验证 10 个锚点 = 0–9 每类一张，划分复现正确。
+```bash
+python -m visualization.method_figs
+python -m visualization.plot_results
+python -m visualization.tsne_viz
+```
+
+## Main Results
+
+| Representation | Propagation coverage | Pseudo-label accuracy | Best round | Val | Test |
+|---|---:|---:|---:|---:|---:|
+| Pixel | 26.59% | 99.62% | 2 | 94.30% | 94.67% |
+| Autoencoder | 16.28% | 99.52% | 2 | 94.70% | 95.22% |
+| SimCLR | 85.87% | 99.50% | 2 | 98.42% | 98.55% |
+
+主要结论：
+
+- SimCLR 表征显著提高同类样本在 embedding 空间中的局部一致性。
+- LGC 标签传播优于只依赖单个锚点距离的最近原型基线。
+- 自训练能继续补充高置信样本，但最终性能主要由表征质量和传播覆盖率决定。
+
+## Notes
+
+- `data/`、`model/`、`result/` 不纳入 GitHub 版本控制，请从补充材料获取或重新运行脚本生成。
+- 重新训练会覆盖 `model/encoder_*.pt` 和 `model/classifier_*.pt`。
+- `--quick` 只用于流程测试，不应作为最终准确率汇报。
+- 伪标签准确率和 t-SNE 真实标签着色只用于诊断分析，不回流到训练或调参。
